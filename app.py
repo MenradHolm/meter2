@@ -43,7 +43,7 @@ COMPANY_NAME = "Meter2 Properties"
 PROP_SWAKOP = "Starshine Guesthouse (Swap)"
 PROP_PLETT = "Melkweg Farmhouse (Plett)"
 PROPERTIES = [PROP_SWAKOP, PROP_PLETT]
-NOTIFICATION_EMAILS = ["nita@holmlab.co.za", "drholm@holmlab.co.za", "info@meter2.co.za"]
+NOTIFICATION_EMAILS = ["menradholm2@gmail.com"]
 
 def send_email_notification(subject, message_body):
     try:
