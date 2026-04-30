@@ -21,6 +21,10 @@ html, body, [class*="css"]  { font-family: 'Roboto', sans-serif; }
 .fc-button-primary { background-color: transparent !important; border-color: white !important; }
 .fc-view-harness { background-color: white !important; border-radius: 0 0 5px 5px !important; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
 .event-card { background-color: white; padding: 15px; border-radius: 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); margin-bottom: 15px; border-left: 4px solid; }
+/* Style for delete buttons */
+div.stButton > button:first-child {
+    border-radius: 5px;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -42,10 +46,12 @@ COMPANY_NAME = "Meter2 Properties"
 PROP_SWAKOP = "Starshine Guesthouse (Swakopmund)"
 PROP_PLETT = "Melkweg Farmhouse (Plettenberg)"
 PROPERTIES = [PROP_SWAKOP, PROP_PLETT]
-NOTIFICATION_EMAILS = ["menradholm2@gmail.com"]
+NOTIFICATION_EMAILS = ["nita@holmlab.co.za", "drholm@holmlab.co.za", "info@meter2.co.za"]
 
 def send_email_notification(subject, message_body):
     try:
+        if "EMAIL_SENDER" not in st.secrets or "EMAIL_PASSWORD" not in st.secrets:
+            return # Skip if not configured
         sender = st.secrets["EMAIL_SENDER"]
         password = st.secrets["EMAIL_PASSWORD"]
         msg = MIMEText(message_body)
@@ -55,29 +61,24 @@ def send_email_notification(subject, message_body):
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
             server.login(sender, password)
             server.send_message(msg)
+        st.toast("📧 Email sent!")
     except Exception as e:
-        st.error(f"Email failed to send. Check EMAIL_SENDER/PASSWORD in Secrets. Error: {e}")
+        st.error(f"Email failed: {e}")
 
 # --- 4. DATABASE FUNCTIONS ---
 def add_internal_booking(property_name, guest_name, start_date, end_date):
-    data = {
-        "property_name": property_name,
-        "guest_name": guest_name,
-        "start_date": start_date,
-        "end_date": end_date,
-        "status": "PENDING"
-    }
-    # Latest supabase-py returns the object directly; we use try/except for error catching
-    try:
-        return supabase.table("internal_bookings").insert(data).execute()
-    except Exception as e:
-        return e
+    data = {"property_name": property_name, "guest_name": guest_name, "start_date": start_date, "end_date": end_date, "status": "PENDING"}
+    return supabase.table("internal_bookings").insert(data).execute()
 
 def update_status(booking_id, new_status):
+    return supabase.table("internal_bookings").update({"status": new_status}).eq("id", booking_id).execute()
+
+def delete_internal_booking(booking_id):
     try:
-        supabase.table("internal_bookings").update({"status": new_status}).eq("id", booking_id).execute()
+        return supabase.table("internal_bookings").delete().eq("id", booking_id).execute()
     except Exception as e:
-        st.error(f"Update failed: {e}")
+        st.error(f"Delete failed: {e}")
+        return None
 
 def get_internal_bookings(property_name=None, status=None):
     if not supabase: return pd.DataFrame()
@@ -86,12 +87,8 @@ def get_internal_bookings(property_name=None, status=None):
         query = query.eq("property_name", property_name)
     if status:
         query = query.eq("status", status)
-    try:
-        response = query.execute()
-        return pd.DataFrame(response.data) if response.data else pd.DataFrame(columns=['id', 'property_name', 'guest_name', 'start_date', 'end_date', 'status'])
-    except Exception as e:
-        st.error(f"Select failed: {e}")
-        return pd.DataFrame()
+    response = query.execute()
+    return pd.DataFrame(response.data) if response.data else pd.DataFrame(columns=['id', 'property_name', 'guest_name', 'start_date', 'end_date', 'status'])
 
 # --- 5. AIRBNB ICAL FETCH ---
 def fetch_airbnb_events(url, property_name, sub_label=""):
@@ -149,31 +146,36 @@ role = st.sidebar.radio("Switch View:", ["Manager (Team View)", f"Owner - {PROP_
 
 if role == "Manager (Team View)":
     st.title("Event Calendar Dashboard")
-    with st.expander("➕ Add New Internal Booking Request", expanded=True):
+    
+    # --- SUBMIT NEW REQUEST ---
+    with st.expander("➕ Add New Internal Booking Request", expanded=False):
         with st.form("new_request"):
             c1, c2, c3, c4 = st.columns(4)
-            p = c1.selectbox("Property", PROPERTIES)
-            g = c2.text_input("Guest Name")
-            s = c3.date_input("Check-In")
-            e = c4.date_input("Check-Out")
+            p, g = c1.selectbox("Property", PROPERTIES), c2.text_input("Guest Name")
+            s, e = c3.date_input("Check-In"), c4.date_input("Check-Out")
             if st.form_submit_button("Submit Request"):
                 if g:
-                    res = add_internal_booking(p, g, str(s), str(e))
-                    if isinstance(res, Exception):
-                        st.error(f"❌ Database Error: {res}")
-                    else:
-                        send_email_notification(f"🔔 Request: {p}", f"New request for {g} at {p} ({s} to {e}).")
-                        st.success("✅ Saved to database!")
-                        st.rerun()
+                    add_internal_booking(p, g, str(s), str(e))
+                    send_email_notification(f"🔔 Request: {p}", f"New request for {g} at {p} ({s} to {e}).")
+                    st.success("✅ Saved!"); st.rerun()
                 else: st.error("Please enter a Guest Name.")
-    
-    i_df, a_df = get_internal_bookings(), get_all_airbnb_bookings()
-    draw_month_calendar(pd.concat([i_df, a_df], ignore_index=True))
 
-    st.markdown("---")
-    st.subheader("🛠️ Database Diagnostic View")
-    st.write("If requests aren't showing up, check if they appear in this table:")
-    st.dataframe(i_df, use_container_width=True)
+    # --- MANAGE / DELETE REQUESTS ---
+    i_df = get_internal_bookings()
+    with st.expander("🗑️ Manage / Remove Existing Requests", expanded=False):
+        if i_df.empty:
+            st.write("No internal bookings found.")
+        else:
+            for idx, row in i_df.iterrows():
+                m_col1, m_col2 = st.columns([4, 1])
+                m_col1.write(f"**{row['guest_name']}** | {row['property_name']} | {row['start_date']} to {row['end_date']} | Status: `{row['status']}`")
+                if m_col2.button("🗑️ Delete", key=f"del_{row['id']}"):
+                    delete_internal_booking(row['id'])
+                    st.success(f"Removed booking for {row['guest_name']}")
+                    st.rerun()
+
+    a_df = get_all_airbnb_bookings()
+    draw_month_calendar(pd.concat([i_df, a_df], ignore_index=True))
 
 else:
     prop_name = role.split("Owner - ")[1]
