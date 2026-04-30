@@ -74,7 +74,9 @@ PROPERTIES = [PROP_SWAKOP, PROP_PLETT]
 
 # --- RECIPIENT EMAILS ---
 NOTIFICATION_EMAILS = [
-    "menradholm2@gmail.com"
+    "nita@holmlab.co.za", 
+    "drholm@holmlab.co.za", 
+    "info@meter2.co.za"
 ]
 
 # --- AIRBNB ICAL LINKS ---
@@ -91,15 +93,13 @@ def send_email_notification(subject, message_body):
         msg = MIMEText(message_body)
         msg['Subject'] = subject
         msg['From'] = sender
-        # Join the list of emails into a single comma-separated string
         msg['To'] = ", ".join(NOTIFICATION_EMAILS)
 
-        # Connect to Gmail's server
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
             server.login(sender, password)
             server.send_message(msg)
     except Exception as e:
-        st.error(f"Email failed to send. Please check your Secrets configuration. Error: {e}")
+        st.error(f"Email notification failed. Error: {e}")
 
 # --- 1. CLOUD DATABASE FUNCTIONS ---
 def add_internal_booking(property_name, guest_name, start_date, end_date):
@@ -110,10 +110,10 @@ def add_internal_booking(property_name, guest_name, start_date, end_date):
         "end_date": end_date,
         "status": "PENDING"
     }
-    supabase.table("internal_bookings").insert(data) # No .execute()
+    supabase.table("internal_bookings").insert(data)
 
 def update_status(booking_id, new_status):
-    supabase.table("internal_bookings").update({"status": new_status}).eq("id", booking_id) # No .execute()
+    supabase.table("internal_bookings").update({"status": new_status}).eq("id", booking_id)
 
 def get_internal_bookings(property_name=None, status=None):
     query = supabase.table("internal_bookings").select("*")
@@ -121,13 +121,8 @@ def get_internal_bookings(property_name=None, status=None):
         query = query.eq("property_name", property_name)
     if status:
         query = query.eq("status", status)
-        
     response = query.execute()
-    
-    if response.data:
-        return pd.DataFrame(response.data)
-    else:
-        return pd.DataFrame(columns=['id', 'property_name', 'guest_name', 'start_date', 'end_date', 'status'])
+    return pd.DataFrame(response.data) if response.data else pd.DataFrame(columns=['id', 'property_name', 'guest_name', 'start_date', 'end_date', 'status'])
 
 # --- 2. FETCH AIRBNB CALENDARS ---
 def fetch_airbnb_events(url, property_name, sub_label=""):
@@ -136,200 +131,101 @@ def fetch_airbnb_events(url, property_name, sub_label=""):
         response = requests.get(url)
         response.raise_for_status()
         cal = Calendar.from_ical(response.content)
-        
         for component in cal.walk('vevent'):
             start = component.get('dtstart').dt
             end = component.get('dtend').dt
-            
             if isinstance(start, datetime): start = start.date()
             if isinstance(end, datetime): end = end.date()
-            
-            guest_label = "AirBnB Booking"
-            if sub_label:
-                guest_label += f" ({sub_label})"
-                
+            guest_label = f"AirBnB Booking{' ('+sub_label+')' if sub_label else ''}"
             events.append({
-                'property_name': property_name,
-                'guest_name': guest_label,
-                'start_date': str(start),
-                'end_date': str(end),
-                'status': 'AIRBNB_CONFIRMED'
+                'property_name': property_name, 'guest_name': guest_label,
+                'start_date': str(start), 'end_date': str(end), 'status': 'AIRBNB_CONFIRMED'
             })
     except Exception as e:
-        st.error(f"Could not sync calendar for {property_name}: {e}")
+        st.error(f"Sync error for {property_name}: {e}")
     return events
 
 @st.cache_data(ttl=300)
 def get_all_airbnb_bookings():
-    swakop = fetch_airbnb_events(URL_SWAKOP, PROP_SWAKOP)
-    plett_full = fetch_airbnb_events(URL_PLETT_FULL, PROP_PLETT, "Full Capacity")
-    plett_less = fetch_airbnb_events(URL_PLETT_LESS, PROP_PLETT, "Reduced Capacity")
-    
-    all_events = swakop + plett_full + plett_less
-    if all_events:
-        return pd.DataFrame(all_events)
-    return pd.DataFrame(columns=['property_name', 'guest_name', 'start_date', 'end_date', 'status'])
+    all_events = (fetch_airbnb_events(URL_SWAKOP, PROP_SWAKOP) + 
+                  fetch_airbnb_events(URL_PLETT_FULL, PROP_PLETT, "Full Capacity") + 
+                  fetch_airbnb_events(URL_PLETT_LESS, PROP_PLETT, "Reduced Capacity"))
+    return pd.DataFrame(all_events) if all_events else pd.DataFrame(columns=['property_name', 'guest_name', 'start_date', 'end_date', 'status'])
 
 # --- 3. MONTH CALENDAR VIEW ---
 def draw_month_calendar(df):
     if df.empty:
         st.info("No events to display.")
         return
-
-    color_map = {
-        "AIRBNB_CONFIRMED": "#E34C51", 
-        "APPROVED": "#1DB9A3",         
-        "PENDING": "#F5A623",          
-        "REJECTED": "#555555"          
-    }
-
+    color_map = {"AIRBNB_CONFIRMED": "#E34C51", "APPROVED": "#1DB9A3", "PENDING": "#F5A623", "REJECTED": "#555555"}
     calendar_events = []
     for _, row in df.iterrows():
-        end_date_obj = pd.to_datetime(row['end_date']) + timedelta(days=1)
-        
+        end_date_exclusive = pd.to_datetime(row['end_date']) + timedelta(days=1)
         calendar_events.append({
-            "title": f"{row['guest_name']} ({row['property_name'][:10]}...)",
+            "title": f"{row['guest_name']} ({row['property_name'][:8]}...)",
             "start": row['start_date'],
-            "end": end_date_obj.strftime('%Y-%m-%d'),
+            "end": end_date_exclusive.strftime('%Y-%m-%d'),
             "backgroundColor": color_map.get(row['status'], "#3788d8"),
             "borderColor": color_map.get(row['status'], "#3788d8"),
         })
-
     calendar_options = {
-        "headerToolbar": {
-            "left": "prev",
-            "center": "title",
-            "right": "next"
-        },
-        "initialView": "dayGridMonth",
-        "height": 650,
-        "selectable": False,       # Stops users from highlighting blank dates
-        "editable": False,         # Stops users from trying to drag-and-drop bookings
-        "eventStartEditable": False,
-        "eventDurationEditable": False
+        "headerToolbar": {"left": "prev", "center": "title", "right": "next"},
+        "initialView": "dayGridMonth", "height": 650,
+        "selectable": False, "editable": False, "eventStartEditable": False, "eventDurationEditable": False
     }
-
     cal_col, list_col = st.columns([2.5, 1])
-
     with cal_col:
         calendar(events=calendar_events, options=calendar_options)
-
     with list_col:
         st.markdown("<h4 style='color: #666; font-weight: 400;'>Upcoming Check-Ins</h4>", unsafe_allow_html=True)
-        
         df['start_date'] = pd.to_datetime(df['start_date'])
-        future_events = df[df['start_date'] >= pd.Timestamp.today()].sort_values('start_date').head(5)
-        
-        for _, row in future_events.iterrows():
-            border_color = color_map.get(row['status'], '#ccc')
-            formatted_date = row['start_date'].strftime('%B %d, %Y')
-            
-            card_html = f"""
-            <div class="event-card" style="border-left-color: {border_color};">
-                <div style="font-size: 0.8em; color: {border_color}; font-weight: bold; text-transform: uppercase;">{row['status']}</div>
-                <div style="font-weight: bold; font-size: 1.1em; margin: 5px 0;">{row['guest_name']}</div>
+        future = df[df['start_date'] >= pd.Timestamp.today()].sort_values('start_date').head(5)
+        for _, row in future.iterrows():
+            st.markdown(f"""<div class="event-card" style="border-left-color: {color_map.get(row['status'], '#ccc')};">
+                <div style="font-size: 0.8em; color: {color_map.get(row['status'], '#ccc')}; font-weight: bold;">{row['status']}</div>
+                <div style="font-weight: bold;">{row['guest_name']}</div>
                 <div style="font-size: 0.9em; color: #666;">{row['property_name']}</div>
-                <div style="font-size: 0.8em; color: #999; margin-top: 5px;">📅 {formatted_date}</div>
-            </div>
-            """
-            st.markdown(card_html, unsafe_allow_html=True)
+                <div style="font-size: 0.8em; color: #999;">📅 {row['start_date'].strftime('%B %d, %Y')}</div>
+            </div>""", unsafe_allow_html=True)
 
 # --- 4. APP LAYOUT & LOGIC ---
 st.sidebar.title(f"🌍 {COMPANY_NAME}")
-role = st.sidebar.radio("Switch View:", [
-    "Manager (Team View)", 
-    f"Owner - {PROP_SWAKOP}", 
-    f"Owner - {PROP_PLETT}"
-])
+role = st.sidebar.radio("Switch View:", ["Manager (Team View)", f"Owner - {PROP_SWAKOP}", f"Owner - {PROP_PLETT}"])
 
 if role == "Manager (Team View)":
     st.title("Event Calendar Dashboard")
-    
     with st.expander("➕ Add New Internal Booking Request"):
         with st.form("new_request"):
-            col1, col2, col3, col4 = st.columns(4)
-            with col1: prop = st.selectbox("Property", PROPERTIES)
-            with col2: guest = st.text_input("Guest Name")
-            with col3: start = st.date_input("Check-In")
-            with col4: end = st.date_input("Check-Out")
-            submit = st.form_submit_button("Submit Request")
-            
-            if submit:
-                # 1. Save to Database
-                add_internal_booking(prop, guest, str(start), str(end))
-                
-                # 2. Format & Send Email
-                subject = f"🔔 Action Required: New Booking Request for {prop}"
-                body = f"""Hello Team,
-
-A new internal booking request has been submitted and is waiting for owner approval.
-
-Property: {prop}
-Guest: {guest}
-Dates: {start} to {end}
-
-Please check the Meter2 Command Center dashboard to approve or reject this request.
-
-- Automated Notification System
-"""
-                send_email_notification(subject, body)
-                
-                st.success(f"Request saved! Notification emails sent to the team.")
-                st.rerun()
-                
-    internal_df = get_internal_bookings()
-    airbnb_df = get_all_airbnb_bookings()
-    
-    master_df = pd.concat([internal_df, airbnb_df], ignore_index=True) if not (internal_df.empty and airbnb_df.empty) else pd.DataFrame()
-    
-    if not master_df.empty:
-        draw_month_calendar(master_df)
-    else:
-        st.info("No bookings found in database or AirBnB.")
-
+            c1, c2, c3, c4 = st.columns(4)
+            p, g = c1.selectbox("Property", PROPERTIES), c2.text_input("Guest Name")
+            s, e = c3.date_input("Check-In"), c4.date_input("Check-Out")
+            if st.form_submit_button("Submit Request"):
+                add_internal_booking(p, g, str(s), str(e))
+                send_email_notification(f"🔔 New Booking Request: {p}", f"New request for {g} from {s} to {e} for {p}.\nLog in to approve.")
+                st.success("Request saved & Emails sent!"); st.rerun()
+    i_df, a_df = get_internal_bookings(), get_all_airbnb_bookings()
+    draw_month_calendar(pd.concat([i_df, a_df], ignore_index=True))
 else:
     prop_name = role.split("Owner - ")[1]
-    st.title(f"{prop_name} Calendar")
-    
-    df_pending = get_internal_bookings(property_name=prop_name, status='PENDING')
-    if not df_pending.empty:
-        st.warning("🔔 Action Required: Pending Approvals")
-        for index, row in df_pending.iterrows():
-            col_text, col_btn1, col_btn2 = st.columns([3, 1, 1])
-            col_text.write(f"**{row['guest_name']}** ({row['start_date']} to {row['end_date']})")
-            
-            if col_btn1.button("✅ Approve", key=f"app_{row['id']}"):
+    st.title(f"{prop_name} Portal")
+    st.subheader("🔔 Pending Approvals")
+    df_p = get_internal_bookings(property_name=prop_name, status='PENDING')
+    if not df_p.empty:
+        for idx, row in df_p.iterrows():
+            col_t, col_b1, col_b2 = st.columns([3, 1, 1])
+            col_t.write(f"**{row['guest_name']}** ({row['start_date']} to {row['end_date']})")
+            if col_b1.button("✅ Approve", key=f"a{row['id']}"):
                 update_status(row['id'], 'APPROVED')
-                
-                # Send Approval Email
-                subject = f"✅ Booking APPROVED: {row['guest_name']} at {prop_name}"
-                body = f"The pending booking for {row['guest_name']} from {row['start_date']} to {row['end_date']} at {prop_name} has been officially APPROVED by the owner."
-                send_email_notification(subject, body)
-                
+                send_email_notification(f"✅ APPROVED: {row['guest_name']}", f"Booking for {row['guest_name']} at {prop_name} was APPROVED.")
                 st.rerun()
-                
-            if col_btn2.button("❌ Reject", key=f"rej_{row['id']}"):
+            if col_b2.button("❌ Reject", key=f"r{row['id']}"):
                 update_status(row['id'], 'REJECTED')
-                
-                # Send Rejection Email
-                subject = f"❌ Booking REJECTED: {row['guest_name']} at {prop_name}"
-                body = f"The pending booking for {row['guest_name']} from {row['start_date']} to {row['end_date']} at {prop_name} was REJECTED."
-                send_email_notification(subject, body)
-                
+                send_email_notification(f"❌ REJECTED: {row['guest_name']}", f"Booking for {row['guest_name']} at {prop_name} was REJECTED.")
                 st.rerun()
-        st.markdown("---")
-        
-    airbnb_df = get_all_airbnb_bookings()
-    internal_df = get_internal_bookings(property_name=prop_name)
-    
-    if not airbnb_df.empty:
-        airbnb_df = airbnb_df[airbnb_df['property_name'] == prop_name]
-    if not internal_df.empty:
-        internal_df = internal_df[internal_df['status'] == 'APPROVED']
-        
-    owner_master_df = pd.concat([internal_df, airbnb_df], ignore_index=True) if not (internal_df.empty and airbnb_df.empty) else pd.DataFrame()
-    
-    if not owner_master_df.empty:
-        draw_month_calendar(owner_master_df)
     else:
-        st.info("No confirmed bookings yet.")
+        st.info("✅ No pending requests for this property at the moment.")
+    st.markdown("---")
+    a_df, i_df = get_all_airbnb_bookings(), get_internal_bookings(property_name=prop_name)
+    a_df = a_df[a_df['property_name'] == prop_name] if not a_df.empty else a_df
+    i_df = i_df[i_df['status'] == 'APPROVED'] if not i_df.empty else i_df
+    draw_month_calendar(pd.concat([i_df, a_df], ignore_index=True))
