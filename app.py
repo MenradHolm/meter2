@@ -3,12 +3,12 @@ import pandas as pd
 import requests
 from icalendar import Calendar
 from datetime import datetime, date, timedelta
-import plotly.express as px
 from supabase import create_client, Client
 from streamlit_calendar import calendar
+import smtplib
+from email.mime.text import MIMEText
 
 # --- APP LAYOUT & THEME OVERRIDE ---
-# Setting light mode baseline to match the mockup
 st.set_page_config(page_title="Meter2 Properties Command Center", layout="wide", initial_sidebar_state="expanded")
 
 # --- CUSTOM CSS FOR MOCKUP STYLING ---
@@ -18,14 +18,12 @@ st.markdown("""
 html, body, [class*="css"]  {
     font-family: 'Roboto', sans-serif;
 }
-/* Force light background for the main content to match the image */
 .stApp {
     background-color: #F4F4F4;
     color: #333333;
 }
-/* Style the FullCalendar header to match the pink mockup */
 .fc-header-toolbar {
-    background-color: #F65C78 !important; /* Pink Header */
+    background-color: #F65C78 !important; 
     color: white !important;
     padding: 15px !important;
     border-radius: 5px 5px 0 0 !important;
@@ -48,7 +46,6 @@ html, body, [class*="css"]  {
     border-radius: 0 0 5px 5px !important;
     box-shadow: 0 4px 6px rgba(0,0,0,0.05);
 }
-/* Right Side Event Cards */
 .event-card {
     background-color: white;
     padding: 15px;
@@ -75,10 +72,34 @@ PROP_SWAKOP = "Starshine Guesthouse (Swakopmund)"
 PROP_PLETT = "Melkweg Farmhouse (Plettenberg)"
 PROPERTIES = [PROP_SWAKOP, PROP_PLETT]
 
+# --- RECIPIENT EMAILS ---
+NOTIFICATION_EMAILS = [
+    "menradholm2@gmail.com"
+]
+
 # --- AIRBNB ICAL LINKS ---
 URL_SWAKOP = "https://www.airbnb.at/calendar/ical/1269982642892159382.ics?t=1d2c8992d5a847febc8bfa4d68c4dc1d"
 URL_PLETT_FULL = "https://www.airbnb.at/calendar/ical/1327289595267027214.ics?t=2fc0352915bf4d0aba96926db8f51aab"
 URL_PLETT_LESS = "https://www.airbnb.at/calendar/ical/1525842544711145278.ics?t=7e30a8982d984a0cb483dcd06a3276ca"
+
+# --- EMAIL NOTIFICATION FUNCTION ---
+def send_email_notification(subject, message_body):
+    try:
+        sender = st.secrets["EMAIL_SENDER"]
+        password = st.secrets["EMAIL_PASSWORD"]
+        
+        msg = MIMEText(message_body)
+        msg['Subject'] = subject
+        msg['From'] = sender
+        # Join the list of emails into a single comma-separated string
+        msg['To'] = ", ".join(NOTIFICATION_EMAILS)
+
+        # Connect to Gmail's server
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+            server.login(sender, password)
+            server.send_message(msg)
+    except Exception as e:
+        st.error(f"Email failed to send. Please check your Secrets configuration. Error: {e}")
 
 # --- 1. CLOUD DATABASE FUNCTIONS ---
 def add_internal_booking(property_name, guest_name, start_date, end_date):
@@ -149,23 +170,21 @@ def get_all_airbnb_bookings():
         return pd.DataFrame(all_events)
     return pd.DataFrame(columns=['property_name', 'guest_name', 'start_date', 'end_date', 'status'])
 
-# --- 3. NEW MONTH CALENDAR VIEW (REPLACING PLOTLY) ---
+# --- 3. MONTH CALENDAR VIEW ---
 def draw_month_calendar(df):
     if df.empty:
         st.info("No events to display.")
         return
 
-    # Map statuses to colors similar to the mockup dots
     color_map = {
-        "AIRBNB_CONFIRMED": "#E34C51", # Rausch Red
-        "APPROVED": "#1DB9A3",         # Babu Teal
-        "PENDING": "#F5A623",          # Yellow/Orange
-        "REJECTED": "#555555"          # Grey
+        "AIRBNB_CONFIRMED": "#E34C51", 
+        "APPROVED": "#1DB9A3",         
+        "PENDING": "#F5A623",          
+        "REJECTED": "#555555"          
     }
 
     calendar_events = []
     for _, row in df.iterrows():
-        # FullCalendar end dates are exclusive, so we add 1 day to make the bar span correctly across the grid
         end_date_obj = pd.to_datetime(row['end_date']) + timedelta(days=1)
         
         calendar_events.append({
@@ -184,10 +203,12 @@ def draw_month_calendar(df):
         },
         "initialView": "dayGridMonth",
         "height": 650,
-        "selectable": True,
+        "selectable": False,       # Stops users from highlighting blank dates
+        "editable": False,         # Stops users from trying to drag-and-drop bookings
+        "eventStartEditable": False,
+        "eventDurationEditable": False
     }
 
-    # Creating the Layout: Calendar on Left (70%), Upcoming Events on Right (30%)
     cal_col, list_col = st.columns([2.5, 1])
 
     with cal_col:
@@ -196,7 +217,6 @@ def draw_month_calendar(df):
     with list_col:
         st.markdown("<h4 style='color: #666; font-weight: 400;'>Upcoming Check-Ins</h4>", unsafe_allow_html=True)
         
-        # Filter for future events to show in the side panel
         df['start_date'] = pd.to_datetime(df['start_date'])
         future_events = df[df['start_date'] >= pd.Timestamp.today()].sort_values('start_date').head(5)
         
@@ -214,10 +234,9 @@ def draw_month_calendar(df):
             """
             st.markdown(card_html, unsafe_allow_html=True)
 
-
 # --- 4. APP LAYOUT & LOGIC ---
 st.sidebar.title(f"🌍 {COMPANY_NAME}")
-role = st.sidebar.selectbox("Log in as:", [
+role = st.sidebar.radio("Switch View:", [
     "Manager (Team View)", 
     f"Owner - {PROP_SWAKOP}", 
     f"Owner - {PROP_PLETT}"
@@ -226,7 +245,6 @@ role = st.sidebar.selectbox("Log in as:", [
 if role == "Manager (Team View)":
     st.title("Event Calendar Dashboard")
     
-    # Move the form to an expander to keep the calendar layout clean like the mockup
     with st.expander("➕ Add New Internal Booking Request"):
         with st.form("new_request"):
             col1, col2, col3, col4 = st.columns(4)
@@ -237,8 +255,26 @@ if role == "Manager (Team View)":
             submit = st.form_submit_button("Submit Request")
             
             if submit:
+                # 1. Save to Database
                 add_internal_booking(prop, guest, str(start), str(end))
-                st.success(f"Request saved!")
+                
+                # 2. Format & Send Email
+                subject = f"🔔 Action Required: New Booking Request for {prop}"
+                body = f"""Hello Team,
+
+A new internal booking request has been submitted and is waiting for owner approval.
+
+Property: {prop}
+Guest: {guest}
+Dates: {start} to {end}
+
+Please check the Meter2 Command Center dashboard to approve or reject this request.
+
+- Automated Notification System
+"""
+                send_email_notification(subject, body)
+                
+                st.success(f"Request saved! Notification emails sent to the team.")
                 st.rerun()
                 
     internal_df = get_internal_bookings()
@@ -261,11 +297,25 @@ else:
         for index, row in df_pending.iterrows():
             col_text, col_btn1, col_btn2 = st.columns([3, 1, 1])
             col_text.write(f"**{row['guest_name']}** ({row['start_date']} to {row['end_date']})")
+            
             if col_btn1.button("✅ Approve", key=f"app_{row['id']}"):
                 update_status(row['id'], 'APPROVED')
+                
+                # Send Approval Email
+                subject = f"✅ Booking APPROVED: {row['guest_name']} at {prop_name}"
+                body = f"The pending booking for {row['guest_name']} from {row['start_date']} to {row['end_date']} at {prop_name} has been officially APPROVED by the owner."
+                send_email_notification(subject, body)
+                
                 st.rerun()
+                
             if col_btn2.button("❌ Reject", key=f"rej_{row['id']}"):
                 update_status(row['id'], 'REJECTED')
+                
+                # Send Rejection Email
+                subject = f"❌ Booking REJECTED: {row['guest_name']} at {prop_name}"
+                body = f"The pending booking for {row['guest_name']} from {row['start_date']} to {row['end_date']} at {prop_name} was REJECTED."
+                send_email_notification(subject, body)
+                
                 st.rerun()
         st.markdown("---")
         
