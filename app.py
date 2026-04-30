@@ -21,10 +21,7 @@ html, body, [class*="css"]  { font-family: 'Roboto', sans-serif; }
 .fc-button-primary { background-color: transparent !important; border-color: white !important; }
 .fc-view-harness { background-color: white !important; border-radius: 0 0 5px 5px !important; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
 .event-card { background-color: white; padding: 15px; border-radius: 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); margin-bottom: 15px; border-left: 4px solid; }
-/* Style for delete buttons */
-div.stButton > button:first-child {
-    border-radius: 5px;
-}
+div.stButton > button:first-child { border-radius: 5px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -51,7 +48,7 @@ NOTIFICATION_EMAILS = ["nita@holmlab.co.za", "drholm@holmlab.co.za", "info@meter
 def send_email_notification(subject, message_body):
     try:
         if "EMAIL_SENDER" not in st.secrets or "EMAIL_PASSWORD" not in st.secrets:
-            return # Skip if not configured
+            return 
         sender = st.secrets["EMAIL_SENDER"]
         password = st.secrets["EMAIL_PASSWORD"]
         msg = MIMEText(message_body)
@@ -90,7 +87,7 @@ def get_internal_bookings(property_name=None, status=None):
     response = query.execute()
     return pd.DataFrame(response.data) if response.data else pd.DataFrame(columns=['id', 'property_name', 'guest_name', 'start_date', 'end_date', 'status'])
 
-# --- 5. AIRBNB ICAL FETCH ---
+# --- 5. AIRBNB ICAL FETCH (REVISED TO GET GUEST NAMES) ---
 def fetch_airbnb_events(url, property_name, sub_label=""):
     events = []
     try:
@@ -98,14 +95,25 @@ def fetch_airbnb_events(url, property_name, sub_label=""):
         response.raise_for_status()
         cal = Calendar.from_ical(response.content)
         for component in cal.walk('vevent'):
+            summary = component.get('summary', 'AirBnB Booking')
+            # Clean AirBnB's summary text (e.g., "Airbnb - John Doe" -> "John Doe")
+            clean_name = summary.replace("Airbnb - ", "").replace("Reserved - ", "").replace("Airbnb", "AirBnB")
+            
             start, end = component.get('dtstart').dt, component.get('dtend').dt
             if isinstance(start, datetime): start = start.date()
             if isinstance(end, datetime): end = end.date()
+            
+            label = f"{clean_name}{' ('+sub_label+')' if sub_label else ''}"
+            
             events.append({
-                'property_name': property_name, 'guest_name': f"AirBnB ({sub_label})" if sub_label else "AirBnB Booking",
-                'start_date': str(start), 'end_date': str(end), 'status': 'AIRBNB_CONFIRMED'
+                'property_name': property_name, 
+                'guest_name': label,
+                'start_date': str(start), 
+                'end_date': str(end), 
+                'status': 'AIRBNB_CONFIRMED'
             })
-    except: pass
+    except Exception as e:
+        st.error(f"AirBnB Sync error: {e}")
     return events
 
 @st.cache_data(ttl=300)
@@ -147,7 +155,6 @@ role = st.sidebar.radio("Switch View:", ["Manager (Team View)", f"Owner - {PROP_
 if role == "Manager (Team View)":
     st.title("Event Calendar Dashboard")
     
-    # --- SUBMIT NEW REQUEST ---
     with st.expander("➕ Add New Internal Booking Request", expanded=False):
         with st.form("new_request"):
             c1, c2, c3, c4 = st.columns(4)
@@ -160,7 +167,6 @@ if role == "Manager (Team View)":
                     st.success("✅ Saved!"); st.rerun()
                 else: st.error("Please enter a Guest Name.")
 
-    # --- MANAGE / DELETE REQUESTS ---
     i_df = get_internal_bookings()
     with st.expander("🗑️ Manage / Remove Existing Requests", expanded=False):
         if i_df.empty:
