@@ -40,8 +40,8 @@ supabase = init_connection()
 
 # --- 3. CONFIGURATION & EMAILS ---
 COMPANY_NAME = "Meter2 Properties"
-PROP_SWAKOP = "Starshine Guesthouse (Swakopmund)"
-PROP_PLETT = "Melkweg Farmhouse (Plettenberg)"
+PROP_SWAKOP = "Starshine Guesthouse (Swap)"
+PROP_PLETT = "Melkweg Farmhouse (Plett)"
 PROPERTIES = [PROP_SWAKOP, PROP_PLETT]
 NOTIFICATION_EMAILS = ["nita@holmlab.co.za", "drholm@holmlab.co.za", "info@meter2.co.za"]
 
@@ -87,7 +87,7 @@ def get_internal_bookings(property_name=None, status=None):
     response = query.execute()
     return pd.DataFrame(response.data) if response.data else pd.DataFrame(columns=['id', 'property_name', 'guest_name', 'start_date', 'end_date', 'status'])
 
-# --- 5. AIRBNB ICAL FETCH (REVISED TO GET GUEST NAMES) ---
+# --- 5. REVISED AIRBNB ICAL FETCH ---
 def fetch_airbnb_events(url, property_name, sub_label=""):
     events = []
     try:
@@ -95,9 +95,22 @@ def fetch_airbnb_events(url, property_name, sub_label=""):
         response.raise_for_status()
         cal = Calendar.from_ical(response.content)
         for component in cal.walk('vevent'):
-            summary = component.get('summary', 'AirBnB Booking')
-            # Clean AirBnB's summary text (e.g., "Airbnb - John Doe" -> "John Doe")
-            clean_name = summary.replace("Airbnb - ", "").replace("Reserved - ", "").replace("Airbnb", "AirBnB")
+            # 1. Get Summary and Description
+            summary = str(component.get('summary', ''))
+            description = str(component.get('description', ''))
+            
+            # 2. Logic to find the best name
+            clean_name = summary
+            if "Reserved" in summary or "Not available" in summary:
+                # If summary is generic, check description (sometimes hidden there)
+                if description and "Airbnb" not in description and len(description) < 30:
+                    clean_name = description
+                else:
+                    clean_name = "Booked" # Simplify generic blocks
+            
+            # 3. Final cleaning of the string
+            clean_name = clean_name.replace("Airbnb - ", "").replace("Reserved - ", "")
+            clean_name = clean_name.replace("(Not available)", "").strip()
             
             start, end = component.get('dtstart').dt, component.get('dtend').dt
             if isinstance(start, datetime): start = start.date()
@@ -112,8 +125,8 @@ def fetch_airbnb_events(url, property_name, sub_label=""):
                 'end_date': str(end), 
                 'status': 'AIRBNB_CONFIRMED'
             })
-    except Exception as e:
-        st.error(f"AirBnB Sync error: {e}")
+    except:
+        pass
     return events
 
 @st.cache_data(ttl=300)
@@ -134,7 +147,7 @@ def draw_month_calendar(df):
     for _, row in df.iterrows():
         end_date_ex = pd.to_datetime(row['end_date']) + timedelta(days=1)
         calendar_events.append({
-            "title": f"{row['guest_name']} ({row['property_name'][:8]}...)",
+            "title": f"{row['guest_name']}",
             "start": row['start_date'], "end": end_date_ex.strftime('%Y-%m-%d'),
             "backgroundColor": color_map.get(row['status'], "#3788d8"), "borderColor": color_map.get(row['status'], "#3788d8"),
         })
@@ -144,7 +157,7 @@ def draw_month_calendar(df):
     with list_col:
         st.markdown("<h4 style='color: #666;'>Upcoming Check-Ins</h4>", unsafe_allow_html=True)
         df['start_date'] = pd.to_datetime(df['start_date'])
-        future = df[df['start_date'] >= pd.Timestamp.today()].sort_values('start_date').head(5)
+        future = df[df['start_date'] >= pd.Timestamp.today()].sort_values('start_date').head(8)
         for _, r in future.iterrows():
             st.markdown(f'<div class="event-card" style="border-left-color: {color_map.get(r["status"], "#ccc")};"><b>{r["status"]}</b><br>{r["guest_name"]}<br><small>{r["property_name"]}</small><br><small>📅 {r["start_date"].strftime("%b %d, %Y")}</small></div>', unsafe_allow_html=True)
 
